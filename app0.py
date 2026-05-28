@@ -10682,8 +10682,6 @@ def is_backoffice_relevant_text(text: str, user_id: str = None) -> bool:
         return True
     if parse_credit_command(raw):
         return True
-    if upper == "CLEAR ALL":
-        return True
 
     return False
 
