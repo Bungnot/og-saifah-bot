@@ -40,15 +40,6 @@ from linebot.v3.webhooks import (
 )
 
 load_dotenv()
-# ย้ายไฟล์ข้อมูลเดิมเข้า Volume ถ้ายังไม่มี
-import shutil
-_DATA_DIR = "/app/data"
-os.makedirs(_DATA_DIR, exist_ok=True)
-for _f in ["users.json", "admins.json", "order_state.json", "slip_topups.json"]:
-    _src = os.path.join(os.path.dirname(__file__), _f)
-    _dst = os.path.join(_DATA_DIR, _f)
-    if os.path.exists(_src) and not os.path.exists(_dst):
-        shutil.copy2(_src, _dst)
 
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET", "")
@@ -190,6 +181,9 @@ FILE_LOCK = threading.RLock()
 # กัน LINE retry / network duplicate ทำให้คำสั่งเดิมถูกคิดซ้ำ
 PROCESSED_MESSAGE_IDS = {}
 PROCESSED_MESSAGE_TTL_SECONDS = 600
+
+# CLEAR ALL pending confirmation
+CLEAR_ALL_PENDING = {}
 
 def cleanup_processed_messages():
     while True:
@@ -10760,6 +10754,78 @@ def should_process_text_message(event, text: str) -> bool:
     return False
 
 
+# ======================================================
+# CLEAR ALL — ล้างสกอ / รอบทุกรอบ / Backup ทั้งหมด
+# ใช้ได้เฉพาะแอดมิน และต้องยืนยัน 2 ครั้ง
+# ======================================================
+def handle_clear_all(event, user_id):
+    global STATE, ROUNDS, ACTIVE_BASE_NO, POSTS, MATCHES, CLEAR_ALL_PENDING
+
+    now = time.time()
+
+    # ครั้งแรก — รอยืนยัน
+    if user_id not in CLEAR_ALL_PENDING or now - CLEAR_ALL_PENDING[user_id] > 60:
+        CLEAR_ALL_PENDING[user_id] = now
+        reply_text(
+            event.reply_token,
+            "⚠️ CLEAR ALL จะล้างทุกอย่างต่อไปนี้:\n"
+            "- สกอและคู่ทั้งหมด\n"
+            "- รอบทุกรอบ (ทุกฐาน)\n"
+            "- Backup ทั้งหมด\n"
+            "- ออเดอร์ทั้งหมด\n\n"
+            "⚠️ พิมพ์ CLEAR ALL อีกครั้งภายใน 60 วินาที เพื่อยืนยัน"
+        )
+        return
+
+    # ครั้งที่ 2 — ยืนยันแล้ว ล้างจริง
+    CLEAR_ALL_PENDING.pop(user_id, None)
+
+    with STATE_LOCK:
+        # ล้าง POSTS และ MATCHES ใน memory
+        POSTS.clear()
+        MATCHES.clear()
+
+        # ล้าง ROUNDS ทุกฐาน
+        for base_no in list(ROUNDS.keys()):
+            ROUNDS[base_no] = make_round_state(base_no)
+
+        # รีเซ็ต STATE กลับเป็นฐาน 1
+        ACTIVE_BASE_NO = "1"
+        STATE = ROUNDS["1"]
+
+        # รีเซ็ต ORDER
+        ORDER_STATE["next_order_no"] = ORDER_START_NO
+        ORDER_STATE["last_reset"] = datetime.now().isoformat()
+        try:
+            save_order_db()
+        except Exception as e:
+            print(f"CLEAR ALL save_order_db error: {e}")
+
+        # ล้าง round_backups
+        try:
+            if os.path.exists(ROUND_BACKUP_DIR):
+                import shutil
+                shutil.rmtree(ROUND_BACKUP_DIR)
+            os.makedirs(ROUND_BACKUP_DIR, exist_ok=True)
+        except Exception as e:
+            print(f"CLEAR ALL backup dir error: {e}")
+
+        # ล้าง slip_topups
+        try:
+            SLIP_TOPUP_DB["slips"] = {}
+            SLIP_TOPUP_DB["updated_at"] = datetime.now().isoformat()
+            save_slip_topup_db()
+        except Exception as e:
+            print(f"CLEAR ALL slip_topup error: {e}")
+
+    reply_text(
+        event.reply_token,
+        "✅ CLEAR ALL เสร็จสิ้น\n"
+        "ล้างสกอ / รอบทุกรอบ / Backup / ออเดอร์ ทั้งหมดแล้ว\n"
+        "พร้อมเปิดรอบใหม่ได้เลย"
+    )
+
+
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
     text = event.message.text.strip()
@@ -11467,6 +11533,16 @@ def handle_message(event):
         )
         return
 
+    # ======================================================
+    # CLEAR ALL — ล้างสกอ / รอบ / Backup ทั้งหมด
+    # ======================================================
+    if text.strip().upper() == "CLEAR ALL":
+        if not is_admin(user_id):
+            reply_text(event.reply_token, "คำสั่งนี้ใช้ได้เฉพาะแอดมิน")
+            return
+        handle_clear_all(event, user_id)
+        return
+
     # ลูกค้าโพสต์ เช่น ชล500 / ชถ500
     offer = parse_offer(text)
     if offer:
@@ -11596,8 +11672,7 @@ def handle_postback(event):
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False, threaded=True)
+    app.run(port=5000, debug=False, use_reloader=False, threaded=True)
 
 threading.Thread(
     target=cleanup_processed_messages,
