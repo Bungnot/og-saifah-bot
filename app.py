@@ -91,28 +91,27 @@ SLIP2GO_API_TOKEN = os.getenv("SLIP2GO_API_TOKEN", "").strip()
 SLIP2GO_AUTH_HEADER_NAME = os.getenv("SLIP2GO_AUTH_HEADER_NAME", "Authorization").strip()
 SLIP2GO_AUTH_PREFIX = os.getenv("SLIP2GO_AUTH_PREFIX", "Bearer").strip()
 SLIP2GO_IMAGE_FIELD = os.getenv("SLIP2GO_IMAGE_FIELD", "file").strip() or "file"
+# แยก connect/read timeout และเพิ่ม retry ให้ Slip2Go เพราะบางช่วง API ตอบช้าเกิน 8 วินาที
 SLIP2GO_CONNECT_TIMEOUT_SECONDS = float(os.getenv("SLIP2GO_CONNECT_TIMEOUT_SECONDS", "5"))
 SLIP2GO_TIMEOUT_SECONDS = float(os.getenv("SLIP2GO_TIMEOUT_SECONDS", "20"))
 SLIP2GO_API_RETRIES = int(os.getenv("SLIP2GO_API_RETRIES", "2"))
 SLIP2GO_API_RETRY_DELAY_SECONDS = float(os.getenv("SLIP2GO_API_RETRY_DELAY_SECONDS", "1.0"))
 SLIP2GO_REQUIRE_RECEIVER_TEXT = os.getenv("SLIP2GO_REQUIRE_RECEIVER_TEXT", "").strip()
+# ส่ง payload ไปให้ Slip2Go ตรวจซ้ำ/ตรวจบัญชีผู้รับตามเอกสาร API Connect
 SLIP2GO_CHECK_DUPLICATE = os.getenv("SLIP2GO_CHECK_DUPLICATE", "1") == "1"
 SLIP2GO_RECEIVER_ACCOUNT_NUMBER = os.getenv("SLIP2GO_RECEIVER_ACCOUNT_NUMBER", SLIP2GO_REQUIRE_RECEIVER_TEXT).strip()
 SLIP2GO_RECEIVER_ACCOUNT_TYPE = os.getenv("SLIP2GO_RECEIVER_ACCOUNT_TYPE", "").strip()
 SLIP2GO_RECEIVER_ACCOUNT_NAME_TH = os.getenv("SLIP2GO_RECEIVER_ACCOUNT_NAME_TH", "").strip()
 SLIP2GO_RECEIVER_ACCOUNT_NAME_EN = os.getenv("SLIP2GO_RECEIVER_ACCOUNT_NAME_EN", "").strip()
+# รองรับบัญชีผู้รับสำหรับเช็คสลิปอัตโนมัติ
+# รูปแบบง่ายใน .env:
+# SLIP2GO_RECEIVER_ACCOUNTS=เลขบัญชี|ชื่อไทย|ชื่ออังกฤษ|ชื่อธนาคาร|ประเภทบัญชี;เลขบัญชี|ชื่อไทย|ชื่ออังกฤษ|ชื่อธนาคาร|ประเภทบัญชี
+# หรือใช้ SLIP2GO_RECEIVER_ACCOUNTS_JSON เป็น JSON list ได้
 SLIP2GO_RECEIVER_ACCOUNTS = os.getenv("SLIP2GO_RECEIVER_ACCOUNTS", "").strip()
 SLIP2GO_RECEIVER_ACCOUNTS_JSON = os.getenv("SLIP2GO_RECEIVER_ACCOUNTS_JSON", "").strip()
 SLIP2GO_DEBUG_MODE = os.getenv("SLIP2GO_DEBUG_MODE", "1") == "1"
+# ถ้า Slip2Go ตอบ 200404 / Slip not found ให้แจ้งรอส่งใหม่ แทนการเงียบ
 SLIP2GO_NOTIFY_NOT_FOUND = os.getenv("SLIP2GO_NOTIFY_NOT_FOUND", "1") == "1"
-
-# ======================================================
-# EasySlip API — ใช้แทน Slip2Go
-# ถ้ามี EASYSLIP_API_KEY จะใช้ EasySlip อัตโนมัติ
-# ======================================================
-EASYSLIP_API_KEY = os.getenv("EASYSLIP_API_KEY", "").strip()
-EASYSLIP_API_URL = "https://api.easyslip.com/api/v1/verify"
-EASYSLIP_TIMEOUT = float(os.getenv("EASYSLIP_TIMEOUT", "15"))
 # ตรวจภาพก่อนส่งเข้า Slip2Go ด้วย QR gate
 # ปิดเป็นค่าเริ่มต้น เพราะรูปสลิปจาก LINE บางครั้งถูกบีบอัด/QR เล็ก ทำให้ OpenCV ตรวจไม่เจอและบอทเงียบ
 # ถ้าต้องการกรองรูปทั่วไปเอง ค่อยตั้ง SLIP_IMAGE_QR_GATE_ENABLED=1
@@ -4350,81 +4349,15 @@ def is_slip2go_duplicate_with_null_data_response(data):
     return False
 
 
-def call_easyslip_api(image_bytes: bytes):
-    """ยิง EasySlip API ตรวจสลิป — คืนค่า (ok, message, normalized_data)"""
-    if not EASYSLIP_API_KEY:
-        return False, "ยังไม่ได้ตั้งค่า EASYSLIP_API_KEY", None
-    if not image_bytes:
-        return False, "ไม่พบไฟล์รูปสลิปจาก LINE", None
-
-    headers = {"Authorization": f"Bearer {EASYSLIP_API_KEY}"}
-    files = {"file": ("slip.jpg", image_bytes, "image/jpeg")}
-
-    try:
-        response = requests.post(EASYSLIP_API_URL, headers=headers, files=files, timeout=EASYSLIP_TIMEOUT)
-    except requests.exceptions.Timeout:
-        return False, "EasySlip ตอบช้า/หมดเวลา", {"_easyslip_network_error": True}
-    except requests.exceptions.RequestException as e:
-        return False, f"เชื่อมต่อ EasySlip ไม่สำเร็จ: {e}", {"_easyslip_network_error": True}
-
-    try:
-        data = response.json()
-    except Exception:
-        return False, f"EasySlip ตอบกลับไม่ถูกต้อง (HTTP {response.status_code})", None
-
-    if response.status_code == 401:
-        return False, "EASYSLIP_API_KEY ไม่ถูกต้อง หรือหมดอายุ", data
-    if response.status_code == 429:
-        return False, "EasySlip: เกิน rate limit กรุณารอสักครู่", data
-    if response.status_code >= 500:
-        return False, f"EasySlip server error (HTTP {response.status_code})", data
-
-    if isinstance(data, dict) and data.get("status") == 200 and "data" in data:
-        slip_data = data["data"]
-        normalized = {
-            "transRef": slip_data.get("transRef", ""),
-            "amount": (
-                slip_data.get("amount", {}).get("amount")
-                if isinstance(slip_data.get("amount"), dict)
-                else slip_data.get("amount")
-            ),
-            "receiver": slip_data.get("receiver", {}),
-            "receiverName": (
-                slip_data.get("receiver", {}).get("displayName")
-                or slip_data.get("receiver", {}).get("name", "")
-            ),
-            "receiverNameTh": slip_data.get("receiver", {}).get("account", {}).get("name", {}).get("th", ""),
-            "receiverNameEn": slip_data.get("receiver", {}).get("account", {}).get("name", {}).get("en", ""),
-            "receiverBank": slip_data.get("receiver", {}).get("bank", {}).get("name", ""),
-            "sender": slip_data.get("sender", {}),
-            "senderName": (
-                slip_data.get("sender", {}).get("displayName")
-                or slip_data.get("sender", {}).get("name", "")
-            ),
-            "date": slip_data.get("date", ""),
-            "_easyslip_verified": True,
-            "_easyslip_raw": slip_data,
-        }
-        return True, "ok", normalized
-
-    # สลิปซ้ำ
-    error_msg = ""
-    if isinstance(data, dict):
-        error_msg = data.get("message") or data.get("msg") or data.get("error") or ""
-        if "duplicate" in str(error_msg).lower() or "ซ้ำ" in str(error_msg) or data.get("status") in [400, 409]:
-            return True, "ok", {
-                "transRef": (data.get("data") or {}).get("transRef", ""),
-                "_easyslip_duplicate": True,
-            }
-
-    return False, f"EasySlip: {error_msg or 'ตรวจสลิปไม่ผ่าน'}", data
-
-
 def call_slip2go_api(image_bytes: bytes):
-    """Proxy → EasySlip (Slip2Go ถูกเปลี่ยนเป็น EasySlip แล้ว)"""
-    return call_easyslip_api(image_bytes)
+    """
+    ยิง API ตรวจสลิปกับ Slip2Go จากรูปภาพที่ลูกค้าส่งเข้า LINE OA
 
-
+    ใช้ endpoint รูปภาพ: /api/verify-slip/qr-image/info
+    ส่งแบบ Multipart/Form-data:
+    - file = ไฟล์รูปสลิป
+    - payload = JSON string เช่น {"checkDuplicate": true, "checkReceiver": [{"accountNumber": "..."}]}
+    """
     if not SLIP2GO_ENABLED:
         return False, "ระบบตรวจสลิปอัตโนมัติถูกปิดอยู่", None
 
@@ -4802,8 +4735,6 @@ def slip2go_text_blob(data):
     return " ".join(values)
 
 def is_slip2go_duplicate(data):
-    if isinstance(data, dict) and data.get("_easyslip_duplicate"):
-        return True
     code, _ = get_slip2go_response_code(data)
     if code == "200501":
         return True
@@ -4822,8 +4753,7 @@ def is_slip2go_duplicate(data):
     return False
 
 def is_slip2go_verified(data):
-    if isinstance(data, dict) and data.get("_easyslip_verified"):
-        return True
+    """ตัดสินสถานะผ่านแบบเข้มงวด: ถ้ามี response code ต้องเป็น Slip is Valid = 200200 เท่านั้น"""
     reject_type, reject_msg = slip2go_reject_reason(data)
     if reject_type:
         return False
@@ -4857,23 +4787,13 @@ def is_slip2go_verified(data):
 
 
 def receiver_check_passed(data):
+    """
+    ถ้าตั้งบัญชีผู้รับไว้ ต้องผ่านการตรวจจาก Slip2Go เท่านั้น
+    บัญชีผู้รับต้องตรงกับ SINGLE_AUTO_TOPUP_RECEIVER เท่านั้น
+    แก้บัคเดิม: ห้ามเอาข้อความใน _slip2go_debug/payload ที่บอทส่งเองมาเป็นหลักฐานว่าผู้รับตรง
+    """
     if not receiver_configured():
         return True
-    # EasySlip: ตรวจชื่อ/เลขบัญชีจาก normalized data
-    if isinstance(data, dict) and data.get("_easyslip_verified"):
-        expected_values = [normalize_compare_text(v) for v in receiver_expected_values() if normalize_compare_text(v)]
-        if not expected_values:
-            return True
-        check_fields = [
-            str(data.get("receiverNameTh") or ""),
-            str(data.get("receiverNameEn") or ""),
-            str(data.get("receiverName") or ""),
-            str(data.get("receiverBank") or ""),
-        ]
-        for _, v in walk_json_values(data.get("receiver") or {}):
-            check_fields.append(str(v))
-        check_blob = normalize_compare_text(" ".join(check_fields))
-        return any(v in check_blob for v in expected_values)
 
     code, _ = get_slip2go_response_code(data)
     if code == "200401":
