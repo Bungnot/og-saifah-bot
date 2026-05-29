@@ -185,6 +185,9 @@ PROCESSED_MESSAGE_TTL_SECONDS = 600
 # CLEAR ALL pending confirmation
 CLEAR_ALL_PENDING = {}
 
+# CLEAR ALL pending confirmation
+CLEAR_ALL_PENDING = {}
+
 def cleanup_processed_messages():
     while True:
         try:
@@ -10439,6 +10442,243 @@ def home():
     return "LINE OA bot is running."
 
 
+# ======================================================
+# ADMIN PANEL
+# ======================================================
+ADMIN_PANEL_TOKEN = os.getenv("ADMIN_PANEL_TOKEN", "").strip()
+
+def check_admin_token(req):
+    token = req.args.get("token") or req.headers.get("X-Admin-Token", "")
+    if not ADMIN_PANEL_TOKEN:
+        return False
+    return token == ADMIN_PANEL_TOKEN
+
+@app.route("/admin", methods=["GET"])
+def admin_panel():
+    if not check_admin_token(request):
+        return "Unauthorized", 401
+    html = """<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Admin Panel</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
+  .header { background: #1e293b; padding: 16px 24px; display: flex; align-items: center; gap: 12px; border-bottom: 1px solid #334155; }
+  .header h1 { font-size: 20px; font-weight: 700; color: #38bdf8; }
+  .container { padding: 24px; max-width: 1000px; margin: 0 auto; }
+  .search-bar { width: 100%; padding: 10px 16px; border-radius: 8px; border: 1px solid #334155; background: #1e293b; color: #e2e8f0; font-size: 15px; margin-bottom: 20px; outline: none; }
+  .search-bar:focus { border-color: #38bdf8; }
+  .stats { display: flex; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
+  .stat-card { background: #1e293b; border-radius: 10px; padding: 16px 24px; flex: 1; min-width: 140px; border: 1px solid #334155; }
+  .stat-card .label { font-size: 12px; color: #94a3b8; margin-bottom: 4px; }
+  .stat-card .value { font-size: 24px; font-weight: 700; color: #38bdf8; }
+  table { width: 100%; border-collapse: collapse; }
+  th { background: #1e293b; padding: 12px 16px; text-align: left; font-size: 13px; color: #94a3b8; border-bottom: 1px solid #334155; }
+  td { padding: 12px 16px; border-bottom: 1px solid #1e293b; font-size: 14px; }
+  tr:hover td { background: #1e293b; }
+  .credit { font-weight: 700; color: #4ade80; }
+  .credit.zero { color: #64748b; }
+  .btn { padding: 6px 14px; border-radius: 6px; border: none; cursor: pointer; font-size: 13px; font-weight: 600; transition: opacity .15s; }
+  .btn:hover { opacity: .8; }
+  .btn-add { background: #22c55e; color: #fff; }
+  .btn-sub { background: #ef4444; color: #fff; }
+  .modal-bg { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 100; align-items: center; justify-content: center; }
+  .modal-bg.open { display: flex; }
+  .modal { background: #1e293b; border-radius: 12px; padding: 28px; width: 340px; border: 1px solid #334155; }
+  .modal h2 { font-size: 18px; margin-bottom: 16px; color: #38bdf8; }
+  .modal label { font-size: 13px; color: #94a3b8; display: block; margin-bottom: 6px; }
+  .modal input { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #334155; background: #0f172a; color: #e2e8f0; font-size: 15px; margin-bottom: 16px; outline: none; }
+  .modal input:focus { border-color: #38bdf8; }
+  .modal-actions { display: flex; gap: 10px; justify-content: flex-end; }
+  .btn-cancel { background: #334155; color: #e2e8f0; }
+  .btn-confirm { background: #38bdf8; color: #0f172a; }
+  .toast { position: fixed; bottom: 24px; right: 24px; background: #22c55e; color: #fff; padding: 12px 20px; border-radius: 8px; font-size: 14px; font-weight: 600; display: none; z-index: 200; }
+  .toast.error { background: #ef4444; }
+  .loading { text-align: center; padding: 40px; color: #64748b; }
+</style>
+</head>
+<body>
+<div class="header">
+  <div>💎</div>
+  <h1>Admin Panel</h1>
+</div>
+<div class="container">
+  <div class="stats">
+    <div class="stat-card"><div class="label">สมาชิกทั้งหมด</div><div class="value" id="total-users">-</div></div>
+    <div class="stat-card"><div class="label">เครดิตรวม</div><div class="value" id="total-credit">-</div></div>
+    <div class="stat-card"><div class="label">มีเครดิต > 0</div><div class="value" id="active-users">-</div></div>
+  </div>
+  <input class="search-bar" id="search" placeholder="🔍 ค้นหาชื่อ หรือ ID สมาชิก..." oninput="filterUsers()">
+  <table>
+    <thead>
+      <tr><th>ID</th><th>ชื่อ</th><th>เครดิต</th><th>จัดการ</th></tr>
+    </thead>
+    <tbody id="user-table"><tr><td colspan="4" class="loading">กำลังโหลด...</td></tr></tbody>
+  </table>
+</div>
+
+<div class="modal-bg" id="modal">
+  <div class="modal">
+    <h2 id="modal-title">แก้ไขเครดิต</h2>
+    <label>ชื่อสมาชิก</label>
+    <input id="modal-name" readonly>
+    <label>จำนวนเครดิต</label>
+    <input id="modal-amount" type="number" min="1" placeholder="ใส่จำนวน..." oninput="this.value=this.value.replace(/[^0-9]/g,'')">
+    <div class="modal-actions">
+      <button class="btn btn-cancel" onclick="closeModal()">ยกเลิก</button>
+      <button class="btn btn-confirm" id="modal-confirm" onclick="confirmCredit()">ยืนยัน</button>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const TOKEN = new URLSearchParams(location.search).get('token') || '';
+let allUsers = [];
+let modalUserId = '';
+let modalMode = '';
+
+async function loadUsers() {
+  try {
+    const res = await fetch(`/admin/api/users?token=${TOKEN}`);
+    const data = await res.json();
+    allUsers = data.users || [];
+    renderStats(data);
+    renderTable(allUsers);
+  } catch(e) {
+    document.getElementById('user-table').innerHTML = '<tr><td colspan="4" class="loading">โหลดไม่สำเร็จ</td></tr>';
+  }
+}
+
+function renderStats(data) {
+  document.getElementById('total-users').textContent = (data.total || 0).toLocaleString();
+  document.getElementById('total-credit').textContent = (data.total_credit || 0).toLocaleString();
+  document.getElementById('active-users').textContent = (data.active_users || 0).toLocaleString();
+}
+
+function renderTable(users) {
+  const tbody = document.getElementById('user-table');
+  if (!users.length) { tbody.innerHTML = '<tr><td colspan="4" class="loading">ไม่พบสมาชิก</td></tr>'; return; }
+  tbody.innerHTML = users.map(u => `
+    <tr>
+      <td>#${u.member_no}</td>
+      <td>${u.name || u.user_id}</td>
+      <td class="credit${u.credit <= 0 ? ' zero' : ''}">${u.credit.toLocaleString()}</td>
+      <td>
+        <button class="btn btn-add" onclick="openModal('${u.user_id}','${(u.name||'').replace(/'/g,'')}',${'add'})">+ บวก</button>
+        <button class="btn btn-sub" onclick="openModal('${u.user_id}','${(u.name||'').replace(/'/g,'')}','sub')">- ลบ</button>
+      </td>
+    </tr>`).join('');
+}
+
+function filterUsers() {
+  const q = document.getElementById('search').value.toLowerCase();
+  renderTable(allUsers.filter(u => (u.name||'').toLowerCase().includes(q) || String(u.member_no).includes(q)));
+}
+
+function openModal(userId, name, mode) {
+  modalUserId = userId; modalMode = mode;
+  document.getElementById('modal-title').textContent = mode === 'add' ? '💚 บวกเครดิต' : '❤️ ลบเครดิต';
+  document.getElementById('modal-name').value = name;
+  document.getElementById('modal-amount').value = '';
+  document.getElementById('modal-confirm').style.background = mode === 'add' ? '#22c55e' : '#ef4444';
+  document.getElementById('modal').classList.add('open');
+  setTimeout(() => document.getElementById('modal-amount').focus(), 100);
+}
+
+function closeModal() { document.getElementById('modal').classList.remove('open'); }
+
+async function confirmCredit() {
+  const amount = parseInt(document.getElementById('modal-amount').value);
+  if (!amount || amount <= 0) { showToast('ใส่จำนวนให้ถูกต้อง', true); return; }
+  try {
+    const res = await fetch('/admin/api/credit', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json','X-Admin-Token': TOKEN},
+      body: JSON.stringify({user_id: modalUserId, amount, mode: modalMode})
+    });
+    const data = await res.json();
+    if (data.ok) {
+      closeModal();
+      showToast(`${modalMode === 'add' ? 'บวก' : 'ลบ'} ${amount.toLocaleString()} เครดิตสำเร็จ`);
+      loadUsers();
+    } else { showToast(data.error || 'เกิดข้อผิดพลาด', true); }
+  } catch(e) { showToast('เชื่อมต่อไม่ได้', true); }
+}
+
+function showToast(msg, isError=false) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.className = 'toast' + (isError ? ' error' : '');
+  t.style.display = 'block';
+  setTimeout(() => t.style.display = 'none', 3000);
+}
+
+document.getElementById('modal').addEventListener('click', function(e) { if(e.target===this) closeModal(); });
+document.getElementById('modal-amount').addEventListener('keydown', e => { if(e.key==='Enter') confirmCredit(); });
+
+loadUsers();
+</script>
+</body>
+</html>"""
+    return html
+
+
+@app.route("/admin/api/users", methods=["GET"])
+def admin_api_users():
+    if not check_admin_token(request):
+        return {"error": "Unauthorized"}, 401
+    with STATE_LOCK:
+        users_list = []
+        for uid, u in USERS.items():
+            users_list.append({
+                "user_id": uid,
+                "member_no": u.get("member_no", 0),
+                "name": u.get("name") or u.get("line_name") or uid,
+                "credit": int(u.get("credit", 0) or 0),
+            })
+        users_list.sort(key=lambda x: x["member_no"])
+        total_credit = sum(u["credit"] for u in users_list)
+        active = sum(1 for u in users_list if u["credit"] > 0)
+    return {
+        "ok": True,
+        "users": users_list,
+        "total": len(users_list),
+        "total_credit": total_credit,
+        "active_users": active,
+    }
+
+
+@app.route("/admin/api/credit", methods=["POST"])
+def admin_api_credit():
+    if not check_admin_token(request):
+        return {"error": "Unauthorized"}, 401
+    data = request.get_json() or {}
+    user_id = data.get("user_id", "").strip()
+    amount = int(data.get("amount", 0) or 0)
+    mode = data.get("mode", "add")
+    if not user_id or amount <= 0:
+        return {"ok": False, "error": "ข้อมูลไม่ครบ"}, 400
+    with STATE_LOCK:
+        user = USERS.get(user_id)
+        if not user:
+            return {"ok": False, "error": "ไม่พบสมาชิก"}, 404
+        old = int(user.get("credit", 0) or 0)
+        if mode == "add":
+            user["credit"] = old + amount
+        else:
+            user["credit"] = max(0, old - amount)
+        try:
+            save_user_db()
+        except Exception as e:
+            return {"ok": False, "error": str(e)}, 500
+    return {"ok": True, "new_credit": user["credit"]}
+
+
+
+
 @app.route("/callback", methods=["POST"])
 def callback():
     signature = request.headers.get("X-Line-Signature")
@@ -10782,24 +11022,79 @@ def handle_clear_all(event, user_id):
     # ครั้งที่ 2 — ยืนยันแล้ว ล้างจริง
     CLEAR_ALL_PENDING.pop(user_id, None)
 
+    with STATE_LOCK:
+        # ล้าง POSTS และ MATCHES ใน memory
+        POSTS.clear()
+        MATCHES.clear()
+
+        # ล้าง ROUNDS ทุกฐาน
+        for base_no in list(ROUNDS.keys()):
+            ROUNDS[base_no] = make_round_state(base_no)
+
+        # รีเซ็ต STATE กลับเป็นฐาน 1
+        ACTIVE_BASE_NO = "1"
+        STATE = ROUNDS["1"]
+
+        # รีเซ็ต ORDER
+        ORDER_STATE["next_order_no"] = ORDER_START_NO
+        ORDER_STATE["last_reset"] = datetime.now().isoformat()
+        try:
+            save_order_db()
+        except Exception as e:
+            print(f"CLEAR ALL save_order_db error: {e}")
+
+        # ล้าง round_backups
+        try:
+            if os.path.exists(ROUND_BACKUP_DIR):
+                import shutil
+                shutil.rmtree(ROUND_BACKUP_DIR)
+            os.makedirs(ROUND_BACKUP_DIR, exist_ok=True)
+        except Exception as e:
+            print(f"CLEAR ALL backup dir error: {e}")
+
+        # ล้าง slip_topups
+        try:
+            SLIP_TOPUP_DB["slips"] = {}
+            SLIP_TOPUP_DB["updated_at"] = datetime.now().isoformat()
+            save_slip_topup_db()
+        except Exception as e:
+            print(f"CLEAR ALL slip_topup error: {e}")
+
+    reply_text(
+        event.reply_token,
+        "✅ CLEAR ALL เสร็จสิ้น\n"
+        "ล้างสกอ / รอบทุกรอบ / Backup / ออเดอร์ ทั้งหมดแล้ว\n"
+        "พร้อมเปิดรอบใหม่ได้เลย"
+    )
+
+
+# ======================================================
+# CLEAR ALL — ล้างสกอ / รอบทุกรอบ / Backup ทั้งหมด
+# ======================================================
+def handle_clear_all(event, user_id):
+    global STATE, ROUNDS, ACTIVE_BASE_NO, POSTS, MATCHES, CLEAR_ALL_PENDING
+    now = time.time()
+    if user_id not in CLEAR_ALL_PENDING or now - CLEAR_ALL_PENDING[user_id] > 60:
+        CLEAR_ALL_PENDING[user_id] = now
+        reply_text(event.reply_token,
+            "⚠️ CLEAR ALL จะล้างทุกอย่างต่อไปนี้:\n"
+            "- คืนเครดิตลูกค้าทุกบิลที่จับคู่อยู่\n"
+            "- สกอและคู่ทั้งหมด\n"
+            "- รอบทุกรอบ (ทุกฐาน)\n"
+            "- Backup และออเดอร์ทั้งหมด\n\n"
+            "⚠️ พิมพ์ CLEAR ALL อีกครั้งภายใน 60 วินาที เพื่อยืนยัน")
+        return
+    CLEAR_ALL_PENDING.pop(user_id, None)
     total_refunded_matches = 0
     total_refunded_credit = 0
-
     with STATE_LOCK:
-        # ===== คืนเครดิตลูกค้าทุกรอบที่ยังไม่แจ้งผล =====
-        cleared_at = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
         reason = "CLEAR ALL โดยแอดมิน"
-
         for base_no, st in list(ROUNDS.items()):
-            if not isinstance(st, dict):
-                continue
+            if not isinstance(st, dict): continue
             round_id = st.get("round_id")
-            if not round_id or st.get("settled"):
-                continue
-
+            if not round_id or st.get("settled"): continue
             for match in list(MATCHES.values()):
-                if match.get("round_id") != round_id:
-                    continue
+                if match.get("round_id") != round_id: continue
                 if match.get("status") == "matched":
                     amount = int(match.get("amount", 0) or 0)
                     maker = USERS.get(match.get("maker_id"))
@@ -10816,29 +11111,22 @@ def handle_clear_all(event, user_id):
                 elif match.get("status") in {"open", "pending"}:
                     match["status"] = "cancelled"
                     match["cancel_reason"] = reason
-
         try:
             save_user_db()
         except Exception as e:
             print(f"CLEAR ALL save_user_db error: {e}")
-
-        # ===== ล้างทุกอย่าง =====
         POSTS.clear()
         MATCHES.clear()
-
         for base_no in list(ROUNDS.keys()):
             ROUNDS[base_no] = make_round_state(base_no)
-
         ACTIVE_BASE_NO = "1"
         STATE = ROUNDS["1"]
-
         ORDER_STATE["next_order_no"] = ORDER_START_NO
         ORDER_STATE["last_reset"] = datetime.now().isoformat()
         try:
             save_order_db()
         except Exception as e:
             print(f"CLEAR ALL save_order_db error: {e}")
-
         try:
             if os.path.exists(ROUND_BACKUP_DIR):
                 import shutil
@@ -10846,22 +11134,18 @@ def handle_clear_all(event, user_id):
             os.makedirs(ROUND_BACKUP_DIR, exist_ok=True)
         except Exception as e:
             print(f"CLEAR ALL backup dir error: {e}")
-
         try:
             SLIP_TOPUP_DB["slips"] = {}
             SLIP_TOPUP_DB["updated_at"] = datetime.now().isoformat()
             save_slip_topup_db()
         except Exception as e:
             print(f"CLEAR ALL slip_topup error: {e}")
-
-    reply_text(
-        event.reply_token,
+    reply_text(event.reply_token,
         "✅ CLEAR ALL เสร็จสิ้น\n\n"
         f"💰 คืนเครดิตลูกค้าแล้ว: {total_refunded_matches:,} บิล\n"
         f"💰 เครดิตคืนรวม: {total_refunded_credit:,} เครดิต\n\n"
         "🗑️ ล้างสกอ / รอบทุกรอบ / Backup / ออเดอร์ ทั้งหมดแล้ว\n"
-        "พร้อมเปิดรอบใหม่ได้เลย"
-    )
+        "พร้อมเปิดรอบใหม่ได้เลย")
 
 
 @handler.add(MessageEvent, message=TextMessageContent)
@@ -11574,6 +11858,14 @@ def handle_message(event):
     # ======================================================
     # CLEAR ALL — ล้างสกอ / รอบ / Backup ทั้งหมด
     # ======================================================
+    if text.strip().upper() == "CLEAR ALL":
+        if not is_admin(user_id):
+            reply_text(event.reply_token, "คำสั่งนี้ใช้ได้เฉพาะแอดมิน")
+            return
+        handle_clear_all(event, user_id)
+        return
+
+    # CLEAR ALL
     if text.strip().upper() == "CLEAR ALL":
         if not is_admin(user_id):
             reply_text(event.reply_token, "คำสั่งนี้ใช้ได้เฉพาะแอดมิน")
