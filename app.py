@@ -4497,85 +4497,90 @@ def easyslip_extract_reference(data: dict, image_bytes: bytes):
 def easyslip_receiver_check_passed(data: dict) -> bool:
     """
     ตรวจบัญชีผู้รับจาก EasySlip V2 response
-    ถ้าไม่ได้ตั้ง EASYSLIP_ACCOUNT_NUMBER ให้ผ่านโดยอัตโนมัติ
+    ถ้าไม่ได้ตั้งค่าทั้ง EASYSLIP_ACCOUNT_NUMBER และ EASYSLIP_ACCOUNT_NAME_TH/EN
+    จะไม่ตรวจ → รับสลิปทุกบัญชี (ไม่แนะนำ)
     """
-    expected = EASYSLIP_ACCOUNT_NUMBER.strip()
-    if not expected:
-        # ไม่ได้ตั้งค่าบัญชีผู้รับ → ไม่ตรวจ → ผ่านทั้งหมด
+    expected_no   = EASYSLIP_ACCOUNT_NUMBER.strip()
+    expected_name_th = EASYSLIP_ACCOUNT_NAME_TH.strip()
+    expected_name_en = EASYSLIP_ACCOUNT_NAME_EN.strip()
+
+    # ถ้าไม่ตั้งค่าเลยแม้แต่อย่างเดียว → ไม่ตรวจ (ผ่านทั้งหมด)
+    if not expected_no and not expected_name_th and not expected_name_en:
         return True
 
-    norm = lambda s: re.sub(r"[^0-9]", "", str(s or ""))
-    expected_digits = norm(expected)
-    if not expected_digits:
-        return True
+    norm_no = lambda s: re.sub(r"[^0-9]", "", str(s or ""))
+    norm_name = lambda s: re.sub(r"\s+", "", str(s or "").lower())
+
+    expected_no_digits = norm_no(expected_no)
 
     try:
         raw = easyslip_get_raw_slip(data)
         receiver = raw.get("receiver", {})
         acct = receiver.get("account", {})
 
-        # รวม candidate ทั้งหมดที่เป็นไปได้
-        candidates = []
-
-        # bank account number
-        bank_obj = acct.get("bank") or {}
-        if isinstance(bank_obj, dict):
-            candidates.append(str(bank_obj.get("account") or ""))
-        elif isinstance(bank_obj, str):
-            candidates.append(bank_obj)
-
-        # proxy (PromptPay / phone / national ID)
-        proxy_obj = acct.get("proxy") or {}
-        if isinstance(proxy_obj, dict):
-            candidates.append(str(proxy_obj.get("account") or ""))
-        elif isinstance(proxy_obj, str):
-            candidates.append(proxy_obj)
-
-        # value field (V1 style ที่บางครั้ง V2 ยังคืนมา)
-        candidates.append(str(acct.get("value") or ""))
-
-        # matchedAccount จาก V2
-        matched = data.get("data", {}).get("matchedAccount") or {}
-        if isinstance(matched, dict):
-            candidates.append(str(matched.get("bankNumber") or ""))
-
-        # ตรวจจากตัวเลขล้วน — ตัด x/X ออกก่อนเทียบ (masked account)
-        # เช่น xxx-x-xxx298 → 298, และ expected 938200xxx298 → 298
-        # เทียบ suffix 6 หลักสุดท้าย เผื่อบัญชี masked
-        for c in candidates:
-            c_digits = norm(c)
-            if not c_digits:
-                continue
-            if c_digits == expected_digits:
+        # ── 1. เทียบชื่อบัญชีก่อน (แม่นยำกว่าเลขบัญชี masked) ──────────────
+        if expected_name_th or expected_name_en:
+            name_th = norm_name(acct.get("name", {}).get("th") or "")
+            name_en = norm_name(acct.get("name", {}).get("en") or "")
+            if expected_name_th and norm_name(expected_name_th) in name_th:
                 return True
-            # เทียบ suffix: ถ้า EasySlip คืนตัวเลขสุดท้าย 4+ หลักตรงกัน ถือว่าผ่าน
-            suffix_len = min(len(c_digits), len(expected_digits), 6)
-            if suffix_len >= 4 and c_digits[-suffix_len:] == expected_digits[-suffix_len:]:
+            if expected_name_en and norm_name(expected_name_en) in name_en:
                 return True
 
-        # fallback ชื่อบัญชี
-        name_th = str(acct.get("name", {}).get("th") or "").strip().lower()
-        name_en = str(acct.get("name", {}).get("en") or "").strip().lower()
-        combined_name = name_th + " " + name_en
-        for name_check in [EASYSLIP_ACCOUNT_NAME_TH, EASYSLIP_ACCOUNT_NAME_EN]:
-            if name_check and name_check.strip().lower() in combined_name:
-                return True
+        # ── 2. เทียบเลขบัญชี (bank account) ─────────────────────────────────
+        if expected_no_digits:
+            bank_obj = acct.get("bank") or {}
+            if isinstance(bank_obj, dict):
+                acct_no_digits = norm_no(bank_obj.get("account") or "")
+                if acct_no_digits:
+                    # exact match
+                    if acct_no_digits == expected_no_digits:
+                        return True
+                    # suffix match (masked เช่น xxx-x-x3329-x)
+                    suffix = min(len(acct_no_digits), len(expected_no_digits), 6)
+                    if suffix >= 4 and acct_no_digits[-suffix:] == expected_no_digits[-suffix:]:
+                        return True
+
+            # ── 3. เทียบ PromptPay proxy (เบอร์โทร / เลขบัตร) ───────────────
+            proxy_obj = acct.get("proxy") or {}
+            if isinstance(proxy_obj, dict):
+                proxy_digits = norm_no(proxy_obj.get("account") or "")
+                if proxy_digits:
+                    if proxy_digits == expected_no_digits:
+                        return True
+                    suffix = min(len(proxy_digits), len(expected_no_digits), 6)
+                    if suffix >= 4 and proxy_digits[-suffix:] == expected_no_digits[-suffix:]:
+                        return True
+
+            # ── 4. matchedAccount จาก EasySlip ───────────────────────────────
+            matched = data.get("data", {}).get("matchedAccount") or {}
+            if isinstance(matched, dict):
+                matched_digits = norm_no(matched.get("bankNumber") or "")
+                if matched_digits and matched_digits == expected_no_digits:
+                    return True
 
         if EASYSLIP_DEBUG_MODE:
-            print(
-                f"EASYSLIP RECEIVER MISMATCH: "
-                f"expected_digits={expected_digits} "
-                f"candidates_digits={[norm(c) for c in candidates if c]} "
-                f"name_th={name_th!r} name_en={name_en!r} "
-                f"name_expected_th={EASYSLIP_ACCOUNT_NAME_TH!r} "
-                f"name_expected_en={EASYSLIP_ACCOUNT_NAME_EN!r}"
-            )
+            try:
+                acct_bank = (acct.get("bank") or {})
+                acct_proxy = (acct.get("proxy") or {})
+                print(
+                    f"EASYSLIP RECEIVER FAIL | "
+                    f"expected_no={expected_no_digits!r} "
+                    f"expected_name_th={expected_name_th!r} "
+                    f"expected_name_en={expected_name_en!r} | "
+                    f"got_bank={norm_no(acct_bank.get('account',''))!r} "
+                    f"got_proxy={norm_no(acct_proxy.get('account',''))!r} "
+                    f"got_name_th={norm_name(acct.get('name',{}).get('th',''))!r}"
+                )
+            except Exception:
+                pass
 
     except Exception as e:
         if EASYSLIP_DEBUG_MODE:
-            print(f"EASYSLIP RECEIVER CHECK ERROR: {e}")
-        # ถ้า parse error ให้ผ่านไปก่อน กันบัญชีจริงโดนบล็อก
-        return True
+            print(f"EASYSLIP RECEIVER CHECK EXCEPTION: {e}")
+        # exception = parse error ไม่ใช่บัญชีผิด → ให้ผ่านไม่ได้
+        # คืน False เพื่อความปลอดภัย
+        return False
 
     return False
 
@@ -10735,40 +10740,49 @@ def home():
 # LINE Flex รองรับ URL จาก domain เดียวกับ webhook แน่นอน
 # ======================================================
 _BANK_SVG_DATA = {
-    "bbl":      ("#1e3a8a", "BBL"),
-    "kbank":    ("#1a5f2a", "K"),
-    "ktb":      ("#009a44", "KTB"),
-    "ttb":      ("#ff6b00", "TTB"),
-    "scb":      ("#4a1e8a", "SCB"),
-    "bay":      ("#ffd700", "BAY"),
-    "gsb":      ("#eb008b", "GSB"),
-    "ghb":      ("#f15a24", "GHB"),
-    "baac":     ("#2e7d32", "BAAC"),
-    "uob":      ("#003087", "UOB"),
-    "cimbt":    ("#c8102e", "CIMB"),
-    "tisco":    ("#003087", "TISCO"),
-    "kkp":      ("#1565c0", "KKP"),
-    "icbct":    ("#c8102e", "ICBC"),
-    "tcd":      ("#e53935", "TCD"),
-    "lh":       ("#1976d2", "LH"),
-    "isbt":     ("#2e7d32", "IBANK"),
-    "mhcb":     ("#c8102e", "MHB"),
-    "scbt":     ("#0066cc", "SC"),
-    "citi":     ("#003087", "CITI"),
-    "bnpp":     ("#009b4e", "BNP"),
-    "boc":      ("#c8102e", "BOC"),
-    "truemoney":("#ff6b00", "TW"),
+    "kbank":     ("#1B5E20", "#A5D6A7", "K"),
+    "scb":       ("#4A148C", "#CE93D8", "SCB"),
+    "bbl":       ("#1565C0", "#90CAF9", "BBL"),
+    "ktb":       ("#006064", "#80DEEA", "KTB"),
+    "ttb":       ("#BF360C", "#FFCCBC", "TTB"),
+    "bay":       ("#F57F17", "#FFF176", "BAY"),
+    "gsb":       ("#880E4F", "#F48FB1", "GSB"),
+    "ghb":       ("#E65100", "#FFCC80", "GHB"),
+    "baac":      ("#1B5E20", "#C8E6C9", "BAAC"),
+    "uob":       ("#0D47A1", "#90CAF9", "UOB"),
+    "cimbt":     ("#B71C1C", "#EF9A9A", "CIMB"),
+    "tisco":     ("#1A237E", "#9FA8DA", "TISCO"),
+    "kkp":       ("#01579B", "#81D4FA", "KKP"),
+    "icbct":     ("#C62828", "#EF9A9A", "ICBC"),
+    "tcd":       ("#C62828", "#EF9A9A", "TCD"),
+    "lh":        ("#1565C0", "#90CAF9", "LH"),
+    "isbt":      ("#1B5E20", "#A5D6A7", "IBANK"),
+    "mhcb":      ("#B71C1C", "#EF9A9A", "MHB"),
+    "scbt":      ("#01579B", "#81D4FA", "SC"),
+    "citi":      ("#0D47A1", "#90CAF9", "CITI"),
+    "bnpp":      ("#004D40", "#80CBC4", "BNP"),
+    "boc":       ("#B71C1C", "#EF9A9A", "BOC"),
+    "truemoney": ("#E65100", "#FFCC80", "TW"),
 }
 
-def _make_bank_svg(color: str, abbr: str) -> bytes:
-    fs = 18 if len(abbr) >= 4 else 22
-    svg = (
-        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80" width="80" height="80">'
-        f'<rect width="80" height="80" rx="16" fill="{color}"/>'
-        f'<text x="40" y="41" font-family="Arial,sans-serif" font-size="{fs}" '
-        f'font-weight="bold" fill="white" text-anchor="middle" dominant-baseline="middle">{abbr}</text>'
-        f'</svg>'
-    )
+def _make_bank_svg(color: str, accent: str, abbr: str) -> bytes:
+    fs = 14 if len(abbr) >= 5 else (16 if len(abbr) == 4 else (18 if len(abbr) == 3 else 24))
+    svg = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80" width="80" height="80">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="{color}"/>
+      <stop offset="100%" stop-color="{color}dd"/>
+    </linearGradient>
+    <clipPath id="clip"><rect width="80" height="80" rx="18"/></clipPath>
+  </defs>
+  <rect width="80" height="80" rx="18" fill="url(#bg)"/>
+  <rect width="80" height="80" rx="18" fill="none" stroke="{accent}33" stroke-width="2"/>
+  <circle cx="70" cy="15" r="20" fill="{accent}18"/>
+  <text x="40" y="43" font-family="'Helvetica Neue',Arial,sans-serif"
+    font-size="{fs}" font-weight="900" fill="#ffffff"
+    text-anchor="middle" dominant-baseline="central"
+    letter-spacing="0.5">{abbr}</text>
+</svg>"""
     return svg.encode("utf-8")
 
 @app.route("/banks/<bank_code>.png", methods=["GET"])
@@ -10777,11 +10791,10 @@ def bank_logo(bank_code):
     key = str(bank_code or "").lower().replace(".png", "")
     entry = _BANK_SVG_DATA.get(key)
     if not entry:
-        # คืน placeholder สีเทา
-        color, abbr = "#9CA3AF", "?"
+        color, accent, abbr = "#9CA3AF", "#ffffff", "?"
     else:
-        color, abbr = entry
-    svg_bytes = _make_bank_svg(color, abbr)
+        color, accent, abbr = entry
+    svg_bytes = _make_bank_svg(color, accent, abbr)
     return Response(svg_bytes, mimetype="image/svg+xml",
                     headers={"Cache-Control": "public, max-age=86400"})
 
