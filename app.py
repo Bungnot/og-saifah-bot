@@ -4522,10 +4522,35 @@ def easyslip_receiver_check_passed(data: dict) -> bool:
         if expected_name_th or expected_name_en:
             name_th = norm_name(acct.get("name", {}).get("th") or "")
             name_en = norm_name(acct.get("name", {}).get("en") or "")
-            if expected_name_th and norm_name(expected_name_th) in name_th:
-                return True
-            if expected_name_en and norm_name(expected_name_en) in name_en:
-                return True
+
+            # ตัดคำนำหน้าชื่อ ออกก่อนเทียบ
+            prefixes = ["นาย", "นาง", "น.ส.", "นางสาว", "mr.", "mrs.", "ms.", "miss"]
+            def strip_prefix(s):
+                for p in prefixes:
+                    if s.startswith(norm_name(p)):
+                        s = s[len(norm_name(p)):]
+                return s.strip()
+
+            name_th_clean = strip_prefix(name_th)
+            name_en_clean = strip_prefix(name_en)
+
+            if expected_name_th:
+                exp_th = strip_prefix(norm_name(expected_name_th))
+                # เทียบ 2 ทิศทาง: expected ใน got หรือ got ใน expected
+                if exp_th and (exp_th in name_th_clean or name_th_clean in exp_th):
+                    return True
+                # เทียบ partial: ตัวแรกของชื่อตรงกัน (กรณี EasySlip ตัดชื่อ)
+                if exp_th and name_th_clean and (
+                    exp_th[:4] == name_th_clean[:4]  # 4 ตัวแรกตรงกัน
+                ):
+                    return True
+
+            if expected_name_en:
+                exp_en = strip_prefix(norm_name(expected_name_en))
+                if exp_en and (exp_en in name_en_clean or name_en_clean in exp_en):
+                    return True
+                if exp_en and name_en_clean and exp_en[:4] == name_en_clean[:4]:
+                    return True
 
         # ── 2. เทียบเลขบัญชี (bank account) ─────────────────────────────────
         if expected_no_digits:
