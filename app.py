@@ -6668,141 +6668,169 @@ def matched_flex_for_user(match, viewer_id):
 
     viewer_side = get_user_side(match, viewer_id)
     other_id = get_other_user_id(match, viewer_id)
-    other = USERS.get(other_id, {})
 
     maker_side = match.get("maker_side")
     taker_side = opposite_side(maker_side)
     play_text = format_match_play_text(match)
     price_min, price_max = get_match_price_range(match)
     price_label = "ราคาเล่น" if match.get("is_custom_price") else "ราคาช่าง"
+    price_text = format_price_range_text(price_min, price_max)
+
+    maker_name = maker.get("line_name") or maker.get("name") or "ผู้โพสต์"
+    taker_name = taker.get("line_name") or taker.get("name") or "ผู้ติด"
+    camp_name = match.get("camp_name") or (get_state_by_round_id(match.get("round_id")) or STATE).get("camp_name") or "-"
+
+    is_viewer_maker = (viewer_id == match.get("maker_id"))
+    viewer_name = maker_name if is_viewer_maker else taker_name
+    viewer_play_side = maker_side if is_viewer_maker else taker_side
+
+    is_win = viewer_side == "ชนะ"
+    side_color_win  = "#16A34A"
+    side_color_lose = "#EF4444"
+
+    def badge(text, bg, color):
+        return {
+            "type": "box", "layout": "vertical",
+            "backgroundColor": bg, "cornerRadius": "20px",
+            "paddingStart": "10px", "paddingEnd": "10px",
+            "paddingTop": "3px", "paddingBottom": "3px",
+            "contents": [{"type": "text", "text": text, "size": "xxs",
+                          "color": color, "weight": "bold"}],
+        }
+
+    def player_box(name, role_text, side_text, is_you, align_end=False):
+        side_color = side_color_win if side_text == "ชนะ" else side_color_lose
+        side_bg    = "#DCFCE7" if side_text == "ชนะ" else "#FEE2E2"
+        role_label = f"{role_text} (คุณ)" if is_you else role_text
+        name_contents = [
+            {"type": "text", "text": role_label, "size": "xxs",
+             "color": "#9CA3AF", "align": "end" if align_end else "start"},
+            {"type": "text", "text": name, "size": "sm", "weight": "bold",
+             "color": "#111111", "wrap": True,
+             "align": "end" if align_end else "start"},
+            {
+                "type": "box", "layout": "vertical",
+                "backgroundColor": side_bg, "cornerRadius": "20px",
+                "paddingStart": "8px", "paddingEnd": "8px",
+                "paddingTop": "2px", "paddingBottom": "2px",
+                "margin": "xs",
+                "alignItems": "flex-end" if align_end else "flex-start",
+                "contents": [{"type": "text", "text": f"ทาย{side_text}",
+                               "size": "xxs", "color": side_color, "weight": "bold"}],
+            },
+        ]
+        return {
+            "type": "box", "layout": "vertical", "flex": 1,
+            "spacing": "none", "contents": name_contents,
+        }
+
+    status_msg = f"คุณทาย{viewer_side} {'ลุ้นผลได้เลย! 🎉' if is_win else 'สู้ๆ นะครับ! 💪'}"
+    status_bg    = "#F0FDF4" if is_win else "#FFF1F2"
+    status_color = side_color_win if is_win else side_color_lose
 
     return {
         "type": "bubble",
         "size": "mega",
         "header": {
             "type": "box",
-            "layout": "vertical",
-            "backgroundColor": "#22C55E",
+            "layout": "horizontal",
+            "backgroundColor": "#16A34A",
+            "paddingAll": "14px",
+            "alignItems": "center",
             "contents": [
                 {
-                    "type": "text",
-                    "text": "✓ จับคู่สำเร็จ",
-                    "weight": "bold",
-                    "size": "lg",
-                    "color": "#FFFFFF",
-                }
+                    "type": "box", "layout": "vertical", "flex": 1, "spacing": "none",
+                    "contents": [
+                        {"type": "text", "text": "✅ จับคู่สำเร็จ",
+                         "weight": "bold", "size": "md", "color": "#FFFFFF"},
+                        {"type": "text", "text": f"Order #{match['order_no']}",
+                         "size": "xs", "color": "rgba(255,255,255,0.7)"},
+                    ]
+                },
+                {
+                    "type": "box", "layout": "vertical", "alignItems": "flex-end",
+                    "contents": [
+                        {"type": "text", "text": f"{match['amount']:,}",
+                         "weight": "bold", "size": "xl", "color": "#FFFFFF"},
+                        {"type": "text", "text": "บาท",
+                         "size": "xs", "color": "rgba(255,255,255,0.7)"},
+                    ]
+                },
             ],
         },
         "body": {
             "type": "box",
             "layout": "vertical",
+            "paddingAll": "14px",
             "spacing": "md",
             "contents": [
+                # ── ข้อมูลค่าย ───────────────────────────────────────────
                 {
-                    "type": "text",
-                    "text": f"Order #{match['order_no']}",
-                    "align": "center",
-                    "color": "#999999",
-                    "size": "sm",
-                },
-                {
-                    "type": "text",
-                    "text": money_text(match["amount"]),
-                    "align": "center",
-                    "weight": "bold",
-                    "size": "xxl",
-                    "color": "#111111",
-                },
-                {
-                    "type": "text",
-                    "text": now_text(),
-                    "align": "center",
-                    "color": "#999999",
-                    "size": "sm",
-                },
-                {"type": "separator", "margin": "md"},
-                {
-                    "type": "box",
-                    "layout": "vertical",
-                    "spacing": "sm",
+                    "type": "box", "layout": "vertical",
+                    "backgroundColor": "#F8FAFC", "cornerRadius": "10px",
+                    "paddingAll": "12px", "spacing": "sm",
                     "contents": [
+                        {"type": "text", "text": f"⚔️  {camp_name}",
+                         "weight": "bold", "size": "sm", "color": "#111111"},
                         {
-                            "type": "text",
-                            "text": f"ค่าย: {match.get('camp_name') or (get_state_by_round_id(match.get('round_id')) or STATE).get('camp_name') or '-'}",
-                            "weight": "bold",
-                            "size": "md",
-                        },
-                        {
-                            "type": "text",
-                            "text": f"แผล: {play_text} | {price_label}: {format_price_range_text(price_min, price_max)} | เล่น {match['amount']:,}",
-                            "size": "sm",
-                            "color": "#555555",
-                        },
-                        {
-                            "type": "text",
-                            "text": f"คุณทาย{viewer_side} vs {other.get('line_name') or other.get('name') or 'User'}",
-                            "size": "sm",
-                            "weight": "bold",
-                            "color": "#16A34A" if viewer_side == "ชนะ" else "#EF4444",
-                            "wrap": True,
-                        },
-                    ],
-                },
-                {"type": "separator", "margin": "md"},
-                {
-                    "type": "box",
-                    "layout": "horizontal",
-                    "contents": [
-                        {
-                            "type": "box",
-                            "layout": "vertical",
+                            "type": "box", "layout": "horizontal",
+                            "spacing": "sm", "flexWrap": "wrap",
                             "contents": [
-                                {
-                                    "type": "text",
-                                    "text": maker.get("line_name") or maker.get("name") or "Maker",
-                                    "weight": "bold",
-                                    "size": "sm",
-                                    "wrap": True,
-                                },
-                                {
-                                    "type": "text",
-                                    "text": f"👤ผู้โพสต์ | ทาย{maker_side}",
-                                    "size": "xs",
-                                    "color": "#888888",
-                                },
-                            ],
-                        },
-                        {
-                            "type": "box",
-                            "layout": "vertical",
-                            "contents": [
-                                {
-                                    "type": "text",
-                                    "text": taker.get("line_name") or taker.get("name") or "Taker",
-                                    "weight": "bold",
-                                    "size": "sm",
-                                    "align": "end",
-                                    "wrap": True,
-                                },
-                                {
-                                    "type": "text",
-                                    "text": f"👤ผู้ติด | ทาย{taker_side}",
-                                    "size": "xs",
-                                    "color": "#888888",
-                                    "align": "end",
-                                },
+                                badge(f"แผล: {play_text}", "#EDE9FE", "#6D28D9"),
+                                badge(f"{price_label}: {price_text}", "#FEF3C7", "#B45309"),
+                                badge(f"เล่น {match['amount']:,}", "#D1FAE5", "#065F46"),
                             ],
                         },
                     ],
                 },
-                {"type": "separator", "margin": "md"},
+                # ── ผู้เล่นทั้งคู่ ────────────────────────────────────────
                 {
-                    "type": "text",
-                    "text": "☑️สถานะ: รอลุ้นผล... หมานๆนะครับ",
-                    "weight": "bold",
-                    "size": "sm",
-                    "color": "#16A34A",
+                    "type": "box", "layout": "horizontal",
+                    "borderColor": "#E5E7EB", "borderWidth": "1px",
+                    "cornerRadius": "10px", "overflow": "hidden",
+                    "contents": [
+                        {
+                            "type": "box", "layout": "vertical",
+                            "flex": 1, "paddingAll": "10px",
+                            "backgroundColor": "#F9FAFB",
+                            "contents": [player_box(
+                                maker_name, "📌 ผู้โพสต์", maker_side,
+                                is_you=is_viewer_maker, align_end=False
+                            )],
+                        },
+                        {
+                            "type": "separator", "color": "#E5E7EB",
+                        },
+                        {
+                            "type": "box", "layout": "vertical",
+                            "flex": 1, "paddingAll": "10px",
+                            "contents": [player_box(
+                                taker_name, "🎯 ผู้ติด", taker_side,
+                                is_you=not is_viewer_maker, align_end=True
+                            )],
+                        },
+                    ],
                 },
+                # ── สถานะ ─────────────────────────────────────────────────
+                {
+                    "type": "box", "layout": "horizontal",
+                    "backgroundColor": status_bg, "cornerRadius": "8px",
+                    "paddingAll": "10px", "spacing": "sm",
+                    "alignItems": "center",
+                    "contents": [
+                        {"type": "text", "text": "🎲", "size": "md", "flex": 0},
+                        {
+                            "type": "box", "layout": "vertical", "flex": 1,
+                            "contents": [
+                                {"type": "text", "text": status_msg,
+                                 "size": "xs", "weight": "bold", "color": status_color},
+                                {"type": "text", "text": now_text(),
+                                 "size": "xxs", "color": "#9CA3AF"},
+                            ]
+                        },
+                    ],
+                },
+                # ── ปุ่มยกเลิก ────────────────────────────────────────────
                 {
                     "type": "button",
                     "style": "secondary",
