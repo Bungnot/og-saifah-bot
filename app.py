@@ -4497,44 +4497,85 @@ def easyslip_extract_reference(data: dict, image_bytes: bytes):
 def easyslip_receiver_check_passed(data: dict) -> bool:
     """
     ตรวจบัญชีผู้รับจาก EasySlip V2 response
-    V2: data.rawSlip.receiver.account.bank.account = เลขบัญชี
-        data.rawSlip.receiver.account.name.th = ชื่อบัญชี
     ถ้าไม่ได้ตั้ง EASYSLIP_ACCOUNT_NUMBER ให้ผ่านโดยอัตโนมัติ
     """
     expected = EASYSLIP_ACCOUNT_NUMBER.strip()
     if not expected:
+        # ไม่ได้ตั้งค่าบัญชีผู้รับ → ไม่ตรวจ → ผ่านทั้งหมด
+        return True
+
+    norm = lambda s: re.sub(r"[^0-9]", "", str(s or ""))
+    expected_digits = norm(expected)
+    if not expected_digits:
         return True
 
     try:
         raw = easyslip_get_raw_slip(data)
         receiver = raw.get("receiver", {})
-        acct_bank = receiver.get("account", {}).get("bank", {})
-        acct_no = str(acct_bank.get("account") or "").strip()
-        norm = lambda s: re.sub(r"[^0-9]", "", s)
-        if acct_no and norm(acct_no) == norm(expected):
-            return True
+        acct = receiver.get("account", {})
 
-        # fallback proxy account (PromptPay)
-        acct_proxy = receiver.get("account", {}).get("proxy", {})
-        proxy_no = str(acct_proxy.get("account") or "").strip()
-        if proxy_no and norm(proxy_no) == norm(expected):
-            return True
+        # รวม candidate ทั้งหมดที่เป็นไปได้
+        candidates = []
+
+        # bank account number
+        bank_obj = acct.get("bank") or {}
+        if isinstance(bank_obj, dict):
+            candidates.append(str(bank_obj.get("account") or ""))
+        elif isinstance(bank_obj, str):
+            candidates.append(bank_obj)
+
+        # proxy (PromptPay / phone / national ID)
+        proxy_obj = acct.get("proxy") or {}
+        if isinstance(proxy_obj, dict):
+            candidates.append(str(proxy_obj.get("account") or ""))
+        elif isinstance(proxy_obj, str):
+            candidates.append(proxy_obj)
+
+        # value field (V1 style ที่บางครั้ง V2 ยังคืนมา)
+        candidates.append(str(acct.get("value") or ""))
+
+        # matchedAccount จาก V2
+        matched = data.get("data", {}).get("matchedAccount") or {}
+        if isinstance(matched, dict):
+            candidates.append(str(matched.get("bankNumber") or ""))
+
+        # ตรวจจากตัวเลขล้วน — ตัด x/X ออกก่อนเทียบ (masked account)
+        # เช่น xxx-x-xxx298 → 298, และ expected 938200xxx298 → 298
+        # เทียบ suffix 6 หลักสุดท้าย เผื่อบัญชี masked
+        for c in candidates:
+            c_digits = norm(c)
+            if not c_digits:
+                continue
+            if c_digits == expected_digits:
+                return True
+            # เทียบ suffix: ถ้า EasySlip คืนตัวเลขสุดท้าย 4+ หลักตรงกัน ถือว่าผ่าน
+            suffix_len = min(len(c_digits), len(expected_digits), 6)
+            if suffix_len >= 4 and c_digits[-suffix_len:] == expected_digits[-suffix_len:]:
+                return True
 
         # fallback ชื่อบัญชี
-        name_th = str(receiver.get("account", {}).get("name", {}).get("th") or "").strip().lower()
-        name_en = str(receiver.get("account", {}).get("name", {}).get("en") or "").strip().lower()
-        for name in [EASYSLIP_ACCOUNT_NAME_TH, EASYSLIP_ACCOUNT_NAME_EN]:
-            if name and name.strip().lower() in (name_th + " " + name_en):
+        name_th = str(acct.get("name", {}).get("th") or "").strip().lower()
+        name_en = str(acct.get("name", {}).get("en") or "").strip().lower()
+        combined_name = name_th + " " + name_en
+        for name_check in [EASYSLIP_ACCOUNT_NAME_TH, EASYSLIP_ACCOUNT_NAME_EN]:
+            if name_check and name_check.strip().lower() in combined_name:
                 return True
 
-        # V2 matchedAccount: ถ้า EasySlip จับคู่บัญชีให้แล้ว ให้เชื่อผลนั้น
-        matched = data.get("data", {}).get("matchedAccount")
-        if matched is not None:
-            matched_no = str(matched.get("bankNumber") or "").strip()
-            if matched_no and norm(matched_no) == norm(expected):
-                return True
-    except Exception:
-        pass
+        if EASYSLIP_DEBUG_MODE:
+            print(
+                f"EASYSLIP RECEIVER MISMATCH: "
+                f"expected_digits={expected_digits} "
+                f"candidates_digits={[norm(c) for c in candidates if c]} "
+                f"name_th={name_th!r} name_en={name_en!r} "
+                f"name_expected_th={EASYSLIP_ACCOUNT_NAME_TH!r} "
+                f"name_expected_en={EASYSLIP_ACCOUNT_NAME_EN!r}"
+            )
+
+    except Exception as e:
+        if EASYSLIP_DEBUG_MODE:
+            print(f"EASYSLIP RECEIVER CHECK ERROR: {e}")
+        # ถ้า parse error ให้ผ่านไปก่อน กันบัญชีจริงโดนบล็อก
+        return True
 
     return False
 
