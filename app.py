@@ -6787,7 +6787,7 @@ def matched_flex_for_user(match, viewer_id):
                 {
                     "type": "box", "layout": "horizontal",
                     "borderColor": "#E5E7EB", "borderWidth": "1px",
-                    "cornerRadius": "10px", "overflow": "hidden",
+                    "cornerRadius": "10px",
                     "alignItems": "center",
                     "contents": [
                         {
