@@ -6717,7 +6717,7 @@ def matched_flex_for_user(match, viewer_id):
             "paddingStart": "10px", "paddingEnd": "10px",
             "paddingTop": "3px", "paddingBottom": "3px",
             "contents": [{"type": "text", "text": text, "size": "xxs",
-                          "color": color, "weight": "bold"}],
+                          "color": color, "weight": "bold", "wrap": True}],
         }
 
     def player_col(name, role_label, side_text, is_you, align_end=False):
@@ -6815,12 +6815,18 @@ def matched_flex_for_user(match, viewer_id):
                         {"type": "text", "text": f"⚔️  {camp_name}",
                          "weight": "bold", "size": "sm", "color": "#111111"},
                         {
-                            "type": "box", "layout": "horizontal",
-                            "spacing": "sm",
+                            "type": "box", "layout": "vertical",
+                            "spacing": "xs",
                             "contents": [
-                                info_badge(f"แผล: {play_text}", "#EDE9FE", "#6D28D9"),
-                                info_badge(f"{price_label}: {price_text}", "#FEF3C7", "#B45309"),
-                                info_badge(f"เล่น {match['amount']:,}", "#D1FAE5", "#065F46"),
+                                {
+                                    "type": "box", "layout": "horizontal",
+                                    "spacing": "sm",
+                                    "contents": [
+                                        info_badge(f"แผล: {play_text}", "#EDE9FE", "#6D28D9"),
+                                        info_badge(f"{price_label}: {price_text}", "#FEF3C7", "#B45309"),
+                                        info_badge(f"เล่น {match['amount']:,}", "#D1FAE5", "#065F46"),
+                                    ],
+                                },
                             ],
                         },
                     ],
