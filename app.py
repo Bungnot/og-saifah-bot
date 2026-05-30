@@ -6788,10 +6788,11 @@ def matched_flex_for_user(match, viewer_id):
                     "type": "box", "layout": "horizontal",
                     "borderColor": "#E5E7EB", "borderWidth": "1px",
                     "cornerRadius": "10px", "overflow": "hidden",
+                    "alignItems": "center",
                     "contents": [
                         {
                             "type": "box", "layout": "vertical",
-                            "flex": 1, "paddingAll": "10px",
+                            "flex": 5, "paddingAll": "10px",
                             "backgroundColor": "#F9FAFB",
                             "contents": [player_box(
                                 maker_name, "📌 ผู้โพสต์", maker_side,
@@ -6799,11 +6800,18 @@ def matched_flex_for_user(match, viewer_id):
                             )],
                         },
                         {
-                            "type": "separator", "color": "#E5E7EB",
+                            "type": "box", "layout": "vertical",
+                            "flex": 2, "paddingAll": "6px",
+                            "alignItems": "center", "justifyContent": "center",
+                            "contents": [
+                                {"type": "text", "text": "VS",
+                                 "size": "sm", "weight": "bold",
+                                 "color": "#9CA3AF", "align": "center"},
+                            ],
                         },
                         {
                             "type": "box", "layout": "vertical",
-                            "flex": 1, "paddingAll": "10px",
+                            "flex": 5, "paddingAll": "10px",
                             "contents": [player_box(
                                 taker_name, "🎯 ผู้ติด", taker_side,
                                 is_you=not is_viewer_maker, align_end=True
