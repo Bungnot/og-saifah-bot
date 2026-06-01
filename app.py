@@ -12030,8 +12030,8 @@ def handle_clear_all(event, user_id):
 
         # ล้าง slip_topups
         try:
-            SLIP_TOPUP_DB["slips"] = {}
-            SLIP_TOPUP_DB["updated_at"] = datetime.now().isoformat()
+            SLIP_TOPUPS["slips"] = {}
+            SLIP_TOPUPS["updated_at"] = datetime.now().isoformat()
             save_slip_topup_db()
         except Exception as e:
             print(f"CLEAR ALL slip_topup error: {e}")
@@ -12111,8 +12111,8 @@ def handle_clear_all(event, user_id):
         except Exception as e:
             print(f"CLEAR ALL backup dir error: {e}")
         try:
-            SLIP_TOPUP_DB["slips"] = {}
-            SLIP_TOPUP_DB["updated_at"] = datetime.now().isoformat()
+            SLIP_TOPUPS["slips"] = {}
+            SLIP_TOPUPS["updated_at"] = datetime.now().isoformat()
             save_slip_topup_db()
         except Exception as e:
             print(f"CLEAR ALL slip_topup error: {e}")
