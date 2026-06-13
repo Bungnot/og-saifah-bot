@@ -2776,7 +2776,7 @@ def is_rules_request(text: str) -> bool:
     return clean in {"กต", "กติกา"}
 
 
-RULES_IMAGE_URL = "https://img2.pic.in.th/26d02e16-f7cf-403f-92ed-2a8eed65d8d1.png"
+RULES_IMAGE_URL = "https://img2.pic.in.th/a94cb668-c419-46d0-afc4-765a2948fdc2.png"
 
 
 def rules_flex() -> dict:
